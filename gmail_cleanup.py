@@ -2,12 +2,13 @@ import os
 import datetime
 import pickle
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, scrolledtext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
+# Scopes for Gmail API (full access for deletion)
 SCOPES = ['https://mail.google.com/']
 
 
@@ -34,8 +35,10 @@ def gmail_auth(log_output):
         raise
 
 
-def clean_old_emails(service, log_output):
+def clean_old_emails(service, log_output, status_label):
     try:
+        status_label.config(text="Cleaning old emails...", fg="blue")
+        app.update()  # Force GUI update
         log_output("🔍 Searching for emails older than 30 days...")
         days = 30
         date_limit = datetime.datetime.now() - datetime.timedelta(days=days)
@@ -44,6 +47,7 @@ def clean_old_emails(service, log_output):
         messages = results.get('messages', [])
         if not messages:
             log_output("✅ No old emails found.")
+            status_label.config(text="Idle", fg="black")
             return
         batch = service.new_batch_http_request()
         for msg in messages:
@@ -56,17 +60,22 @@ def clean_old_emails(service, log_output):
             log_output(f"📦 Queued email ID: {msg_id} for archiving")
         batch.execute()
         log_output(f"✅ Archived {len(messages)} emails older than {days} days.")
+        status_label.config(text="Idle", fg="black")
     except HttpError as e:
         log_output(f"❌ Error archiving emails: {str(e)}")
+        status_label.config(text="Error occurred", fg="red")
 
 
-def delete_spam(service, log_output):
+def delete_spam(service, log_output, status_label):
     try:
+        status_label.config(text="Deleting spam...", fg="blue")
+        app.update()  # Force GUI update
         log_output("🧹 Looking for spam emails to delete...")
         spam = service.users().messages().list(userId='me', labelIds=['SPAM'], maxResults=100).execute()
         messages = spam.get('messages', [])
         if not messages:
             log_output("✅ No spam emails found.")
+            status_label.config(text="Idle", fg="black")
             return
 
         batch = service.new_batch_http_request()
@@ -82,48 +91,29 @@ def delete_spam(service, log_output):
 
         for msg in messages:
             msg_id = msg['id']
-            # Use delete directly
             batch.add(service.users().messages().delete(userId='me', id=msg_id), callback=callback)
 
         batch.execute()
         log_output(f"✅ Processed {len(messages)} spam emails, successfully deleted {deleted_count}.")
-
-        # If some emails remain, try moving to trash first
-        if deleted_count < len(messages):
-            log_output("⚠️ Some emails weren’t deleted directly. Attempting trash method...")
-            remaining = service.users().messages().list(userId='me', labelIds=['SPAM'], maxResults=100).execute()
-            remaining_msgs = remaining.get('messages', [])
-            if remaining_msgs:
-                batch_trash = service.new_batch_http_request()
-                for msg in remaining_msgs:
-                    msg_id = msg['id']
-                    # Move to trash first
-                    batch_trash.add(service.users().messages().trash(userId='me', id=msg_id), callback=callback)
-                batch_trash.execute()
-                # Then permanently delete from trash
-                trash = service.users().messages().list(userId='me', labelIds=['TRASH'], maxResults=100).execute()
-                trash_msgs = trash.get('messages', [])
-                if trash_msgs:
-                    batch_delete = service.new_batch_http_request()
-                    for msg in trash_msgs:
-                        msg_id = msg['id']
-                        batch_delete.add(service.users().messages().delete(userId='me', id=msg_id), callback=callback)
-                    batch_delete.execute()
-                log_output(f"✅ Final cleanup: {deleted_count} spam emails deleted.")
+        status_label.config(text="Idle", fg="black")
     except HttpError as e:
         log_output(f"❌ Error deleting spam: {str(e)}")
+        status_label.config(text="Error occurred", fg="red")
 
 
-def start_cleanup():
+def start_cleanup(service, log_output, status_label):
     try:
+        status_label.config(text="Authenticating...", fg="blue")
+        app.update()  # Force GUI update
         log_output("🔐 Authenticating with Gmail...")
-        service = gmail_auth(log_output)
         log_output("✅ Authentication successful!")
-        clean_old_emails(service, log_output)
-        delete_spam(service, log_output)
+        clean_old_emails(service, log_output, status_label)
+        delete_spam(service, log_output, status_label)
         messagebox.showinfo("Done", "Email cleanup completed successfully!")
+        status_label.config(text="Idle", fg="black")
     except Exception as e:
         messagebox.showerror("Error", f"Cleanup failed: {str(e)}")
+        status_label.config(text="Error occurred", fg="red")
 
 
 def log_output(msg):
@@ -133,15 +123,57 @@ def log_output(msg):
     output_text.config(state=tk.DISABLED)
 
 
+def clear_log():
+    output_text.config(state=tk.NORMAL)  # Enable the widget
+    output_text.delete(1.0, tk.END)  # Clear all text
+    output_text.config(state=tk.DISABLED)  # Disable it again
+
+
+# Build enhanced GUI
 app = tk.Tk()
 app.title("📧 Gmail Cleanup Tool")
-app.geometry("600x400")
+app.geometry("600x450")
 app.resizable(False, False)
 
-tk.Label(app, text="Gmail Inbox Cleanup", font=("Helvetica", 16, "bold")).pack(pady=10)
-tk.Button(app, text="Start Cleanup", command=start_cleanup, bg="#4CAF50", fg="white", font=("Arial", 12),
-          width=20, height=2).pack(pady=10)
-output_text = tk.Text(app, wrap=tk.WORD, height=15, state=tk.DISABLED)
+# Header Frame
+header_frame = tk.Frame(app, bg="#f0f0f0")
+header_frame.pack(fill=tk.X, pady=10)
+tk.Label(header_frame, text="Gmail Inbox Cleanup", font=("Helvetica", 18, "bold"), bg="#f0f0f0").pack(pady=5)
+
+# Status Frame
+status_frame = tk.Frame(app)
+status_frame.pack(fill=tk.X, padx=10, pady=5)
+tk.Label(status_frame, text="Status:", font=("Arial", 12, "bold")).pack(side=tk.LEFT)
+status_label = tk.Label(status_frame, text="Idle", font=("Arial", 12), fg="black")
+status_label.pack(side=tk.LEFT, padx=5)
+
+# Buttons Frame
+button_frame = tk.Frame(app)
+button_frame.pack(pady=10)
+tk.Button(button_frame, text="Start Cleanup",
+          command=lambda: start_cleanup(service, log_output, status_label),
+          bg="#4CAF50", fg="white", font=("Arial", 12), width=15, height=2).pack(side=tk.LEFT, padx=5)
+tk.Button(button_frame, text="Clear Log",
+          command=clear_log,  # Updated to use the new function
+          bg="#2196F3", fg="white", font=("Arial", 12), width=15, height=2).pack(side=tk.LEFT, padx=5)
+tk.Button(button_frame, text="Quit",
+          command=app.quit,
+          bg="#f44336", fg="white", font=("Arial", 12), width=15, height=2).pack(side=tk.LEFT, padx=5)
+
+# Output Text Area
+output_text = scrolledtext.ScrolledText(app, wrap=tk.WORD, height=15, state=tk.DISABLED, font=("Arial", 10))
 output_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+# Footer Frame (optional info)
+footer_frame = tk.Frame(app, bg="#f0f0f0")
+footer_frame.pack(fill=tk.X, pady=5)
+tk.Label(footer_frame, text="v1.0 | Powered by Gmail API", font=("Arial", 8), bg="#f0f0f0").pack()
+
+# Initialize Gmail service
+try:
+    service = gmail_auth(log_output)
+except Exception as e:
+    messagebox.showerror("Error", f"Initialization failed: {str(e)}")
+    app.quit()
 
 app.mainloop()
